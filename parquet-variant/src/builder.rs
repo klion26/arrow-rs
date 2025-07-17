@@ -511,11 +511,33 @@ enum ParentState<'a> {
 }
 
 impl ParentState<'_> {
+    /// Return a mutable reference to the buffer that this parent state is using.
     fn buffer(&mut self) -> &mut ValueBuffer {
         match self {
             ParentState::Variant { buffer, .. } => buffer,
             ParentState::List { buffer, .. } => buffer,
             ParentState::Object { buffer, .. } => buffer,
+        }
+    }
+
+    /// Return mutable references to the buffer and metadata builder that this
+    /// parent state is using.
+    fn buffer_and_metadata_builder(&mut self) -> (&mut ValueBuffer, &mut MetadataBuilder) {
+        match self {
+            ParentState::Variant {
+                buffer,
+                metadata_builder,
+            } => (buffer, metadata_builder),
+            ParentState::List {
+                buffer,
+                metadata_builder,
+                ..
+            } => (buffer, metadata_builder),
+            ParentState::Object {
+                buffer,
+                metadata_builder,
+                ..
+            } => (buffer, metadata_builder),
         }
     }
 
@@ -1084,58 +1106,16 @@ impl<'a> ObjectBuilder<'a> {
         key: &str,
         value: T,
     ) -> Result<(), ArrowError> {
-        match &mut self.parent_state {
-            ParentState::Variant {
-                buffer,
-                metadata_builder,
-            } => {
-                let field_id = metadata_builder.upsert_field_name(key);
-                let field_start = buffer.offset() - self.object_start_offset;
+        let (buffer, metadata_builder) = self.parent_state.buffer_and_metadata_builder();
+        let field_id = metadata_builder.upsert_field_name(key);
+        let field_start = buffer.offset() - self.object_start_offset;
 
-                if self.fields.insert(field_id, field_start).is_some()
-                    && self.validate_unique_fields
-                {
-                    self.duplicate_fields.insert(field_id);
-                }
-
-                buffer.try_append_variant(value.into(), metadata_builder)?;
-                Ok(())
-            }
-            ParentState::List {
-                buffer,
-                metadata_builder,
-                ..
-            } => {
-                let field_id = metadata_builder.upsert_field_name(key);
-                let field_start = buffer.offset() - self.object_start_offset;
-
-                if self.fields.insert(field_id, field_start).is_some()
-                    && self.validate_unique_fields
-                {
-                    self.duplicate_fields.insert(field_id);
-                }
-
-                buffer.try_append_variant(value.into(), metadata_builder)?;
-                Ok(())
-            }
-            ParentState::Object {
-                buffer,
-                metadata_builder,
-                ..
-            } => {
-                let field_id = metadata_builder.upsert_field_name(key);
-                let field_start = buffer.offset() - self.object_start_offset;
-
-                if self.fields.insert(field_id, field_start).is_some()
-                    && self.validate_unique_fields
-                {
-                    self.duplicate_fields.insert(field_id);
-                }
-
-                buffer.try_append_variant(value.into(), metadata_builder)?;
-                Ok(())
-            }
+        if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
+            self.duplicate_fields.insert(field_id);
         }
+
+        buffer.try_append_variant(value.into(), metadata_builder)?;
+        Ok(())
     }
 
     /// Enables validation for unique field keys when inserting into this object.
