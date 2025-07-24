@@ -1235,9 +1235,10 @@ impl<'a> ListBuilder<'a> {
             .chain(offsets)
             .chain(data_size_bytes);
 
+        let vec_buf: Vec<u8> = bytes_to_splice.collect();
         buffer
             .inner_mut()
-            .splice(starting_offset..starting_offset, bytes_to_splice);
+            .splice(starting_offset..starting_offset, vec_buf);
 
         self.parent_state.finish(starting_offset);
         self.has_been_finished = true;
