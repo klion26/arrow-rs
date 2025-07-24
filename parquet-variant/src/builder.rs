@@ -1258,31 +1258,31 @@ impl<'a> ListBuilder<'a> {
 
         // Write header
         let header = array_header(is_large, offset_size);
-
-        let num_elements_bytes =
-            num_elements
-                .to_le_bytes()
-                .into_iter()
-                .take(if is_large { 4 } else { 1 });
-        let offsets = PackedU32Iterator::new(
-            offset_size as usize,
-            self.offsets
-                .clone()
-                .into_iter()
-                .map(|offset| (offset as u32).to_le_bytes()),
-        );
-        let data_size_bytes = data_size
-            .to_le_bytes()
-            .into_iter()
-            .take(offset_size as usize);
-        let bytes_to_splice = std::iter::once(header)
-            .chain(num_elements_bytes)
-            .chain(offsets)
-            .chain(data_size_bytes);
-
+        let header_size = 1
+            + (if is_large { 4 } else { 1 })
+            + (offset_size as usize * num_elements)
+            + offset_size as usize;
+        let mut header_bytes = vec![1u8; header_size];
+        let mut header_pos = 0;
+        header_bytes[header_pos] = header;
+        header_pos += 1;
+        if is_large {
+            header_bytes[header_pos..header_pos + 4].copy_from_slice(&num_elements.to_le_bytes());
+            header_pos += 4;
+        } else {
+            header_bytes[header_pos] = num_elements as u8;
+            header_pos += 1;
+        }
+        for offset in self.offsets.clone() {
+            header_bytes[header_pos..header_pos + offset_size as usize]
+                .copy_from_slice(&offset.to_le_bytes()[..offset_size as usize]);
+            header_pos += offset_size as usize;
+        }
+        header_bytes[header_pos..header_pos + offset_size as usize]
+            .copy_from_slice(&data_size.to_le_bytes()[..offset_size as usize]);
         buffer
             .inner_mut()
-            .splice(starting_offset..starting_offset, bytes_to_splice);
+            .splice(starting_offset..starting_offset, header_bytes);
 
         self.parent_state.finish(starting_offset);
         self.has_been_finished = true;
