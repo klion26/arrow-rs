@@ -1460,16 +1460,16 @@ impl<'a> ObjectBuilder<'a> {
         let data_size_bytes = (data_size as u32).to_le_bytes();
         let data_size_bytes_iter = data_size_bytes.iter().take(offset_size as usize).copied();
         let header = object_header(is_large, id_size, offset_size);
-        let bytess_to_splice = std::iter::once(header)
-            .chain(num_elements_bytes)
-            .chain(fields)
-            .chain(offsets)
-            .chain(data_size_bytes_iter);
+        let mut bytes_to_splice = vec![header];
+        bytes_to_splice.extend(num_elements_bytes);
+        bytes_to_splice.extend(fields);
+        bytes_to_splice.extend(offsets);
+        bytes_to_splice.extend(data_size_bytes_iter);
 
         let starting_offset = self.parent_value_offset_base;
         // Shift existing data to make room for the header
         let buffer = parent_buffer.inner_mut();
-        buffer.splice(starting_offset..starting_offset, bytess_to_splice);
+        buffer.splice(starting_offset..starting_offset, bytes_to_splice);
 
         self.parent_state.finish(starting_offset);
 
