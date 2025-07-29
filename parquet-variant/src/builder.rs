@@ -368,63 +368,6 @@ impl ValueBuffer {
 
         Ok(())
     }
-
-    /// Writes out the header byte for a variant object or list, from the starting position
-    /// of the buffer, will return the position after this write
-    fn append_header_start_from_buf_pos(
-        &mut self,
-        start_pos: usize, // the start position where the header will be inserted
-        header_byte: u8,
-        is_large: bool,
-        num_fields: usize,
-    ) -> usize {
-        let buffer = self.inner_mut();
-
-        // Write header at the original start position
-        let mut header_pos = start_pos;
-
-        // Write header byte
-        buffer[header_pos] = header_byte;
-        header_pos += 1;
-
-        // Write number of fields
-        if is_large {
-            buffer[header_pos..header_pos + 4].copy_from_slice(&(num_fields as u32).to_le_bytes());
-            header_pos += 4;
-        } else {
-            buffer[header_pos] = num_fields as u8;
-            header_pos += 1;
-        }
-
-        header_pos
-    }
-
-    /// Writes out the offsets for an array of offsets, including the final offset (data size).
-    /// from the starting position of the buffer, will return the position after this write
-    fn append_offset_array_start_from_buf_pos(
-        &mut self,
-        start_pos: usize,
-        offsets: impl IntoIterator<Item = usize>,
-        data_size: Option<usize>,
-        nbytes: u8,
-    ) -> usize {
-        let buf = self.inner_mut();
-
-        let mut current_pos = start_pos;
-        for relative_offset in offsets {
-            write_offset_at_pos(buf, current_pos, relative_offset, nbytes);
-            current_pos += nbytes as usize;
-        }
-
-        // Write data_size
-        if let Some(data_size) = data_size {
-            // Write data_size at the end of the offsets
-            write_offset_at_pos(buf, current_pos, data_size, nbytes);
-            current_pos += nbytes as usize;
-        }
-
-        current_pos
-    }
 }
 
 /// Builder for constructing metadata for [`Variant`] values.
@@ -1462,49 +1405,34 @@ impl<'a> ObjectBuilder<'a> {
         let num_fields = self.fields.len();
         let is_large = num_fields > u8::MAX as usize;
 
-        let header_size = 1 + // header byte
-            (if is_large { 4 } else { 1 }) + // num_fields
+        let num_fileds_size = if is_large { 4 } else { 1 }; // is_large: 4 bytes, else 1 byte.
+        let header_size = 1 + // header byte (i.e., `object_header`)
+            num_fileds_size + // num_fields_size
             (num_fields * id_size as usize) + // field IDs
             ((num_fields + 1) * offset_size as usize); // field offsets + data_size
 
+        let mut bytes_to_splice = Vec::with_capacity(header_size + 3);
+        // Write header byte
+        let header = object_header(is_large, id_size, offset_size);
+
+        bytes_to_splice.push(header);
+        append_packed_u32(&mut bytes_to_splice, num_fields as u32, num_fileds_size);
+
+        for field_id in self.fields.keys() {
+            append_packed_u32(&mut bytes_to_splice, *field_id, id_size as usize);
+        }
+
+        for offset in self.fields.values() {
+            append_packed_u32(&mut bytes_to_splice, *offset as u32, id_size as usize);
+        }
+
+        append_packed_u32(&mut bytes_to_splice, data_size as u32, offset_size as usize);
         let starting_offset = self.parent_value_offset_base;
 
         // Shift existing data to make room for the header
         let buffer = parent_buffer.inner_mut();
-        buffer.splice(
-            starting_offset..starting_offset,
-            std::iter::repeat_n(0u8, header_size),
-        );
+        buffer.splice(starting_offset..starting_offset, bytes_to_splice);
 
-        // Write header at the original start position
-        let mut header_pos = starting_offset;
-
-        // Write header byte
-        let header = object_header(is_large, id_size, offset_size);
-
-        header_pos = self
-            .parent_state
-            .buffer()
-            .append_header_start_from_buf_pos(header_pos, header, is_large, num_fields);
-
-        header_pos = self
-            .parent_state
-            .buffer()
-            .append_offset_array_start_from_buf_pos(
-                header_pos,
-                self.fields.keys().copied().map(|id| id as usize),
-                None,
-                id_size,
-            );
-
-        self.parent_state
-            .buffer()
-            .append_offset_array_start_from_buf_pos(
-                header_pos,
-                self.fields.values().copied(),
-                Some(data_size),
-                offset_size,
-            );
         self.parent_state.finish(starting_offset);
 
         // Mark that this object has been finished
