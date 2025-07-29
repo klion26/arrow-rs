@@ -64,17 +64,53 @@ fn write_offset(buf: &mut Vec<u8>, value: usize, nbytes: u8) {
     buf.extend_from_slice(&bytes[..nbytes as usize]);
 }
 
-/// Write little-endian integer to buffer at a specific position
-fn write_offset_at_pos(buf: &mut [u8], start_pos: usize, value: usize, nbytes: u8) {
-    let bytes = value.to_le_bytes();
-    buf[start_pos..start_pos + nbytes as usize].copy_from_slice(&bytes[..nbytes as usize]);
-}
-
 /// Append `value_size` bytes of given `value` into `dest`.
 fn append_packed_u32(dest: &mut Vec<u8>, value: u32, value_size: usize) {
     let n = dest.len() + value_size;
     dest.extend(value.to_le_bytes());
     dest.truncate(n);
+}
+
+/// An iterator that yields the bytes of a packed u32 iterator.
+/// Will yield the first `packed_bytes` bytes of each item in the iterator.
+struct PackedU32Iterator<T: Iterator<Item = [u8; 4]>> {
+    packed_bytes: usize,
+    iterator: T,
+    current_item: [u8; 4],
+    current_byte: usize, // 0..3
+}
+
+impl<T: Iterator<Item = [u8; 4]>> PackedU32Iterator<T> {
+    fn new(packed_bytes: usize, iterator: T) -> Self {
+        // eliminate corner cases in `next` by initializing with a fake already-consumed "first" item
+        Self {
+            packed_bytes,
+            iterator,
+            current_item: [0; 4],
+            current_byte: packed_bytes,
+        }
+    }
+}
+
+impl<T: Iterator<Item = [u8; 4]>> Iterator for PackedU32Iterator<T> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<u8> {
+        if self.current_byte >= self.packed_bytes {
+            self.current_item = self.iterator.next()?;
+            self.current_byte = 0;
+        }
+
+        let rval = self.current_item[self.current_byte];
+        self.current_byte += 1;
+        Some(rval)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let lower = (self.packed_bytes - self.current_byte)
+            + self.packed_bytes * self.iterator.size_hint().0;
+        (lower, None)
+    }
 }
 
 /// Wrapper around a `Vec<u8>` that provides methods for appending
@@ -1406,32 +1442,34 @@ impl<'a> ObjectBuilder<'a> {
         let is_large = num_fields > u8::MAX as usize;
 
         let num_fileds_size = if is_large { 4 } else { 1 }; // is_large: 4 bytes, else 1 byte.
-        let header_size = 1 + // header byte (i.e., `object_header`)
-            num_fileds_size + // num_fields_size
-            (num_fields * id_size as usize) + // field IDs
-            ((num_fields + 1) * offset_size as usize); // field offsets + data_size
 
-        let mut bytes_to_splice = Vec::with_capacity(header_size + 3);
-        // Write header byte
+        let num_fields_bytes = num_fields.to_le_bytes();
+        let num_elements_bytes = num_fields_bytes.iter().take(num_fileds_size).copied();
+
+        let fields = PackedU32Iterator::new(
+            id_size as usize,
+            self.fields.keys().map(|offset| offset.to_le_bytes()),
+        );
+        let offsets = PackedU32Iterator::new(
+            offset_size as usize,
+            self.fields
+                .values()
+                .map(|offset| (*offset as u32).to_le_bytes()),
+        );
+
+        let data_size_bytes = (data_size as u32).to_le_bytes();
+        let data_size_bytes_iter = data_size_bytes.iter().take(offset_size as usize).copied();
         let header = object_header(is_large, id_size, offset_size);
+        let bytess_to_splice = std::iter::once(header)
+            .chain(num_elements_bytes)
+            .chain(fields)
+            .chain(offsets)
+            .chain(data_size_bytes_iter);
 
-        bytes_to_splice.push(header);
-        append_packed_u32(&mut bytes_to_splice, num_fields as u32, num_fileds_size);
-
-        for field_id in self.fields.keys() {
-            append_packed_u32(&mut bytes_to_splice, *field_id, id_size as usize);
-        }
-
-        for offset in self.fields.values() {
-            append_packed_u32(&mut bytes_to_splice, *offset as u32, id_size as usize);
-        }
-
-        append_packed_u32(&mut bytes_to_splice, data_size as u32, offset_size as usize);
         let starting_offset = self.parent_value_offset_base;
-
         // Shift existing data to make room for the header
         let buffer = parent_buffer.inner_mut();
-        buffer.splice(starting_offset..starting_offset, bytes_to_splice);
+        buffer.splice(starting_offset..starting_offset, bytess_to_splice);
 
         self.parent_state.finish(starting_offset);
 
