@@ -98,6 +98,26 @@ impl VariantAsPrimitive<datatypes::UInt64Type> for Variant<'_, '_> {
     }
 }
 
+impl VariantAsPrimitive<datatypes::TimestampMicrosecondType> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i64> {
+        match self {
+            Variant::TimestampMicros(dt) => Some(dt.timestamp_micros()),
+            Variant::TimestampNtzMicros(ndt) => Some(ndt.and_utc().timestamp_micros()),
+            _ => None,
+        }
+    }
+}
+
+impl VariantAsPrimitive<datatypes::TimestampNanosecondType> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i64> {
+        match self {
+            Variant::TimestampNanos(dt) => dt.timestamp_nanos_opt(),
+            Variant::TimestampNtzNanos(ndt) => ndt.and_utc().timestamp_nanos_opt(),
+            _ => None,
+        }
+    }
+}
+
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
     ($array:expr, $cast_fn:expr, $index:expr) => {{
