@@ -16,12 +16,13 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveArray, PrimitiveBuilder,
+    Array, ArrayRef, BinaryViewArray, BooleanBuilder, NullBufferBuilder, PrimitiveBuilder,
 };
 use arrow::compute::CastOptions;
 use arrow::datatypes::{self, ArrowPrimitiveType, DataType};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
+use std::marker::PhantomData;
 
 use crate::type_conversion::VariantAsPrimitive;
 use crate::{VariantArray, VariantValueArrayBuilder};
@@ -33,7 +34,7 @@ use std::sync::Arc;
 /// `VariantToArrowRowBuilder` (below) and `VariantToShreddedPrimitiveVariantRowBuilder` (in
 /// `shred_variant.rs`).
 pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
-    Boolean(VariantToBooleanArrowRowBuilder<'a>),
+    Boolean(VariantToPrimitiveArrowRowBuilder<'a, BooleanConverter>),
     Int8(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int8Type>),
     Int16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int16Type>),
     Int32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int32Type>),
@@ -85,6 +86,7 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
     pub fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
         use PrimitiveVariantToArrowRowBuilder::*;
         match self {
+            Boolean(b) => b.append_value(value),
             Int8(b) => b.append_value(value),
             Int16(b) => b.append_value(value),
             Int32(b) => b.append_value(value),
@@ -96,7 +98,6 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float16(b) => b.append_value(value),
             Float32(b) => b.append_value(value),
             Float64(b) => b.append_value(value),
-            Boolean(b) => b.append_value(value),
             TimestampMicro(b) => b.append_value(value),
             TimestampNano(b) => b.append_value(value),
         }
@@ -161,7 +162,10 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
     use PrimitiveVariantToArrowRowBuilder::*;
 
     let builder = match data_type {
-        DataType::Boolean => Boolean(VariantToBooleanArrowRowBuilder::new(cast_options, capacity)),
+        DataType::Boolean => Boolean(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
         DataType::Int8 => Int8(VariantToPrimitiveArrowRowBuilder::new(
             cast_options,
             capacity,
@@ -333,58 +337,109 @@ fn get_type_name<T: ArrowPrimitiveType>() -> &'static str {
     }
 }
 
-/// Builder for converting variant values to boolean values
-/// Boolean is not primitive types in Arrow, so we need a separate builder
-pub(crate) struct VariantToBooleanArrowRowBuilder<'a> {
-    builder: arrow::array::BooleanBuilder,
-    cast_options: &'a CastOptions<'a>,
+pub(crate) trait ArrowBuilder {
+    type Native;
+    fn append_value(&mut self, value: Self::Native);
+    fn append_null(&mut self);
+    fn inner_finish(&mut self) -> ArrayRef;
 }
 
-impl<'a> VariantToBooleanArrowRowBuilder<'a> {
-    fn new(cast_options: &'a CastOptions<'a>, capacity: usize) -> Self {
-        Self {
-            builder: arrow::array::BooleanBuilder::with_capacity(capacity),
-            cast_options,
-        }
+impl<T: ArrowPrimitiveType> ArrowBuilder for PrimitiveBuilder<T> {
+    type Native = T::Native;
+
+    fn append_value(&mut self, value: Self::Native) {
+        self.append_value(value);
     }
 
-    fn append_null(&mut self) -> Result<()> {
-        self.builder.append_null();
-        Ok(())
+    fn append_null(&mut self) {
+        self.append_null();
     }
 
-    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if let Some(v) = value.as_boolean() {
-            self.builder.append_value(v);
-            Ok(true)
-        } else {
-            if !self.cast_options.safe {
-                // Unsafe casting: return error on conversion failure
-                return Err(ArrowError::CastError(format!(
-                    "Failed to extract boolean from variant {:?} at path VariantPath([])",
-                    value
-                )));
-            }
-            // Safe casting: append null on conversion failure
-            self.builder.append_null();
-            Ok(false)
-        }
+    fn inner_finish(&mut self) -> ArrayRef {
+        Arc::new(self.finish())
+    }
+}
+
+impl ArrowBuilder for BooleanBuilder {
+    type Native = bool;
+
+    fn append_value(&mut self, value: Self::Native) {
+        self.append_value(value)
     }
 
-    fn finish(mut self) -> Result<ArrayRef> {
-        Ok(Arc::new(self.builder.finish()))
+    fn append_null(&mut self) {
+        self.append_null()
+    }
+
+    fn inner_finish(&mut self) -> ArrayRef {
+        Arc::new(self.finish())
+    }
+}
+
+pub(crate) trait VariantConverter: Sized {
+    type Builder: ArrowBuilder<Native = Self::Native>;
+    type Native;
+
+    fn new_builder(capacity: usize) -> Self::Builder;
+
+    fn finish(mut builder: Self::Builder) -> ArrayRef {
+        Arc::new(builder.inner_finish())
+    }
+
+    fn extract_value(variant: &Variant) -> Option<Self::Native>;
+
+    fn type_name() -> &'static str;
+}
+
+impl<T> VariantConverter for T
+where
+    T: ArrowPrimitiveType,
+    for<'m, 'v> Variant<'m, 'v>: VariantAsPrimitive<T>,
+{
+    type Builder = PrimitiveBuilder<T>;
+    type Native = T::Native;
+
+    fn new_builder(capacity: usize) -> Self::Builder {
+        PrimitiveBuilder::<T>::with_capacity(capacity)
+    }
+
+    fn extract_value(variant: &Variant) -> Option<Self::Native> {
+        variant.as_primitive()
+    }
+
+    fn type_name() -> &'static str {
+        get_type_name::<T>()
+    }
+}
+
+pub(crate) struct BooleanConverter;
+impl VariantConverter for BooleanConverter {
+    type Builder = BooleanBuilder;
+    type Native = bool;
+
+    fn new_builder(capacity: usize) -> Self::Builder {
+        BooleanBuilder::with_capacity(capacity)
+    }
+
+    fn extract_value(variant: &Variant) -> Option<Self::Native> {
+        variant.as_boolean()
+    }
+
+    fn type_name() -> &'static str {
+        "boolean"
     }
 }
 
 /// Builder for converting variant values to primitive values
-pub(crate) struct VariantToPrimitiveArrowRowBuilder<'a, T: ArrowPrimitiveType> {
-    builder: arrow::array::PrimitiveBuilder<T>,
+pub(crate) struct VariantToPrimitiveArrowRowBuilder<'a, C: VariantConverter> {
+    builder: C::Builder,
     cast_options: &'a CastOptions<'a>,
     // this used to change the data type of the resulting array, e.g. to add timezone info
     target_data_type: Option<DataType>,
+    _converter: PhantomData<C>,
 }
 
-impl<'a, T: ArrowPrimitiveType> VariantToPrimitiveArrowRowBuilder<'a, T> {
+impl<'a, C: VariantConverter> VariantToPrimitiveArrowRowBuilder<'a, C> {
     fn new(cast_options: &'a CastOptions<'a>, capacity: usize) -> Self {
         Self::new_with_target_type(cast_options, capacity, None)
     }
@@ -395,25 +450,19 @@ impl<'a, T: ArrowPrimitiveType> VariantToPrimitiveArrowRowBuilder<'a, T> {
         target_data_type: Option<DataType>,
     ) -> Self {
         Self {
-            builder: PrimitiveBuilder::<T>::with_capacity(capacity),
+            builder: C::new_builder(capacity),
             cast_options,
             target_data_type,
+            _converter: PhantomData,
         }
     }
-}
-
-impl<'a, T> VariantToPrimitiveArrowRowBuilder<'a, T>
-where
-    T: ArrowPrimitiveType,
-    for<'m, 'v> Variant<'m, 'v>: VariantAsPrimitive<T>,
-{
     fn append_null(&mut self) -> Result<()> {
         self.builder.append_null();
         Ok(())
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if let Some(v) = value.as_primitive() {
+        if let Some(v) = C::extract_value(value) {
             self.builder.append_value(v);
             Ok(true)
         } else {
@@ -421,27 +470,26 @@ where
                 // Unsafe casting: return error on conversion failure
                 return Err(ArrowError::CastError(format!(
                     "Failed to extract primitive of type {} from variant {:?} at path VariantPath([])",
-                    get_type_name::<T>(),
+                    C::type_name(),
                     value
                 )));
             }
             // Safe casting: append null on conversion failure
-            self.builder.append_null();
+            let _ = self.append_null();
             Ok(false)
         }
     }
 
-    fn finish(mut self) -> Result<ArrayRef> {
-        let array: PrimitiveArray<T> = self.builder.finish();
+    fn finish(self) -> Result<ArrayRef> {
+        let array = C::finish(self.builder);
 
         if let Some(target_type) = self.target_data_type {
             let data = array.into_data();
             let new_data = data.into_builder().data_type(target_type).build()?;
-            let array_with_new_type = PrimitiveArray::<T>::from(new_data);
-            return Ok(Arc::new(array_with_new_type));
+            return Ok(Arc::new(arrow::array::make_array(new_data)));
         }
 
-        Ok(Arc::new(array))
+        Ok(array)
     }
 }
 
