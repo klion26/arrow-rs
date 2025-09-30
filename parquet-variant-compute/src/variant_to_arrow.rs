@@ -28,6 +28,7 @@ use crate::type_conversion::VariantAsPrimitive;
 use crate::{VariantArray, VariantValueArrayBuilder};
 
 use arrow_schema::TimeUnit;
+use chrono::Datelike;
 use std::sync::Arc;
 
 /// Builder for converting variant values to primitive Arrow arrays. It is used by both
@@ -48,6 +49,7 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     Float64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float64Type>),
     TimestampMicro(VariantToPrimitiveArrowRowBuilder<'a, datatypes::TimestampMicrosecondType>),
     TimestampNano(VariantToPrimitiveArrowRowBuilder<'a, datatypes::TimestampNanosecondType>),
+    Date(VariantToPrimitiveArrowRowBuilder<'a, DateConverter>),
 }
 
 /// Builder for converting variant values into strongly typed Arrow arrays.
@@ -80,6 +82,7 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float64(b) => b.append_null(),
             TimestampMicro(b) => b.append_null(),
             TimestampNano(b) => b.append_null(),
+            Date(b) => b.append_null(),
         }
     }
 
@@ -100,6 +103,7 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float64(b) => b.append_value(value),
             TimestampMicro(b) => b.append_value(value),
             TimestampNano(b) => b.append_value(value),
+            Date(b) => b.append_value(value),
         }
     }
 
@@ -120,6 +124,7 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float64(b) => b.finish(),
             TimestampMicro(b) => b.finish(),
             TimestampNano(b) => b.finish(),
+            Date(b) => b.finish(),
         }
     }
 }
@@ -228,6 +233,10 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
                 Some(target_type),
             ))
         }
+        DataType::Date32 => Date(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
         _ if data_type.is_primitive() => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Primitive data_type {data_type:?} not yet implemented"
@@ -427,6 +436,24 @@ impl VariantConverter for BooleanConverter {
 
     fn type_name() -> &'static str {
         "boolean"
+    }
+}
+
+pub(crate) struct DateConverter;
+impl VariantConverter for DateConverter {
+    type Builder = PrimitiveBuilder<datatypes::Date32Type>;
+    type Native = i32;
+
+    fn new_builder(capacity: usize) -> Self::Builder {
+        PrimitiveBuilder::<datatypes::Date32Type>::with_capacity(capacity)
+    }
+
+    fn extract_value(variant: &Variant) -> Option<Self::Native> {
+        variant.as_naive_date()?.num_days_from_ce()
+    }
+
+    fn type_name() -> &'static str {
+        "Date32"
     }
 }
 

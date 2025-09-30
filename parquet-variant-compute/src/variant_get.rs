@@ -928,6 +928,17 @@ mod test {
         .with_timezone("+00:00")
     );
 
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_date32_variant_array, || {
+        arrow::array::Date32Array::from(vec![-12345, 1, 23456])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_date32_as_date32,
+        DataType::Date32,
+        perfectly_shredded_date32_variant_array,
+        arrow::array::Date32Array::from(vec![-12345, 1, 23456])
+    );
+
     macro_rules! assert_variant_get_as_variant_array_with_default_option {
         ($variant_array: expr, $array_expected: expr) => {{
             let options = GetOptions::new();
