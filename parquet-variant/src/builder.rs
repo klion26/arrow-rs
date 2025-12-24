@@ -52,6 +52,48 @@ pub(crate) fn int_size(v: usize) -> u8 {
     }
 }
 
+/// An iterator that yields the bytes fo a packed u32 iterator
+/// Will yield the first `packed_bytes` bytes of each item in the iterator
+struct PackedU32Iterator<const PACKED_BYTES: usize, T: Iterator<Item = [u8; 4]>> {
+    iterator: T,
+    current_item: [u8; 4],
+    current_byte: usize, // 0..3
+}
+
+impl<const PACKED_BYTES: usize, T: Iterator<Item = [u8; 4]>> PackedU32Iterator<PACKED_BYTES, T> {
+    fn new(packed_bytes: usize, iterator: T) -> Self {
+        // eliminate corner cases in `next` by initializing
+        // with a fake already-consumed "first" item
+        Self {
+            iterator,
+            current_item: [0; 4],
+            current_byte: packed_bytes,
+        }
+    }
+}
+
+impl<const PACKED_BYTES: usize, T: Iterator<Item = [u8; 4]>> Iterator
+    for PackedU32Iterator<PACKED_BYTES, T>
+{
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_byte >= PACKED_BYTES {
+            self.current_item = self.iterator.next()?;
+            self.current_byte = 0;
+        }
+
+        let rval = self.current_item[self.current_byte];
+        self.current_byte += 1;
+        Some(rval)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let lower = (PACKED_BYTES - self.current_byte) + PACKED_BYTES * self.iterator.size_hint().0;
+        (lower, Some(lower))
+    }
+}
+
 /// Write little-endian integer to buffer at a specific position
 fn write_offset_at_pos(buf: &mut [u8], start_pos: usize, value: usize, nbytes: u8) {
     let bytes = value.to_le_bytes();

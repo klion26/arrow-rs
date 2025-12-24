@@ -32,6 +32,12 @@ fn object_header(large: bool, id_size: u8, offset_size: u8) -> u8 {
         | VariantBasicType::Object as u8
 }
 
+fn append_packed_u32<const SIZE: usize>(dest: &mut Vec<u8>, value: u32) {
+    let n = dest.len() + SIZE;
+    dest.extend(value.to_le_bytes());
+    dest.truncate(n);
+}
+
 /// A builder for creating [`Variant::Object`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
@@ -228,7 +234,7 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
         });
 
         let max_id = self.fields.iter().map(|(i, _)| *i).max().unwrap_or(0);
-        let id_size = int_size(max_id as usize);
+        let id_size: u8 = int_size(max_id as usize);
 
         let starting_offset = self.parent_state.saved_value_builder_offset;
         let value_builder = self.parent_state.value_builder();
@@ -244,12 +250,48 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
             (if is_large { 4 } else { 1 }) + // num_fields
             (num_fields * id_size as usize) + // field IDs
             ((num_fields + 1) * offset_size as usize); // field offsets + data_size
+        // Calculated header size becomes a hint; being wrong only risks extra allocations.
+        // Make sure to reserve enough capacity to handle the extra bytes we'll truncate.
+        let mut bytes_to_splice = Vec::with_capacity(header_size + 3);
+        let header = object_header(is_large, id_size, offset_size);
+        bytes_to_splice.push(header);
+
+        match id_size {
+            1 => append_packed_u32::<1>(&mut bytes_to_splice, num_fields as u32),
+            2 => append_packed_u32::<2>(&mut bytes_to_splice, num_fields as u32),
+            4 => append_packed_u32::<4>(&mut bytes_to_splice, num_fields as u32),
+            _ => panic!("unsupport"),
+        }
+
+        for field_id in self.fields.keys() {
+            match id_size {
+                1 => append_packed_u32::<1>(&mut bytes_to_splice, *field_id),
+                2 => append_packed_u32::<2>(&mut bytes_to_splice, *field_id),
+                4 => append_packed_u32::<4>(&mut bytes_to_splice, *field_id),
+                _ => panic!("unsupport"),
+            }
+        }
+
+        for offset in self.fields.values() {
+            match offset_size {
+                1 => append_packed_u32::<1>(&mut bytes_to_splice, *offset as u32),
+                2 => append_packed_u32::<2>(&mut bytes_to_splice, *offset as u32),
+                4 => append_packed_u32::<4>(&mut bytes_to_splice, *offset as u32),
+                _ => panic!("unsupport"),
+            }
+        }
+
+        match offset_size {
+            1 => append_packed_u32::<1>(&mut bytes_to_splice, data_size as u32),
+            2 => append_packed_u32::<2>(&mut bytes_to_splice, data_size as u32),
+            4 => append_packed_u32::<4>(&mut bytes_to_splice, data_size as u32),
+            _ => panic!("unsupport"),
+        }
 
         // Shift existing data to make room for the header
-        value_builder.inner_mut().splice(
-            starting_offset..starting_offset,
-            std::iter::repeat_n(0u8, header_size),
-        );
+        value_builder
+            .inner_mut()
+            .splice(starting_offset..starting_offset, bytes_to_splice);
 
         // Write header at the original start position
         let mut header_pos = starting_offset;
