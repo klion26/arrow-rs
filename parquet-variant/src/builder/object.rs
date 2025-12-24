@@ -1,3 +1,4 @@
+use std::io::Read;
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -33,9 +34,7 @@ fn object_header(large: bool, id_size: u8, offset_size: u8) -> u8 {
 }
 
 fn append_packed_u32<const SIZE: usize>(dest: &mut Vec<u8>, value: u32) {
-    let n = dest.len() + SIZE;
-    dest.extend(value.to_le_bytes());
-    dest.truncate(n);
+    dest.extend(value.to_le_bytes().iter().take(SIZE));
 }
 
 /// A builder for creating [`Variant::Object`] values.
