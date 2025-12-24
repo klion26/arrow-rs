@@ -48,11 +48,11 @@ impl<const OFFSET_SIZE: usize, const ID_SIZE: usize> ObjectHeaderWriter<OFFSET_S
 
         append_packed_u32::<ID_SIZE>(dst, num_fields as u32);
 
-        for &id in &field_ids {
+        for id in field_ids {
             append_packed_u32::<ID_SIZE>(dst, id);
         }
 
-        for &off in &offsets {
+        for off in offsets {
             append_packed_u32::<OFFSET_SIZE>(dst, off as u32);
         }
 
