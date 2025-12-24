@@ -24,17 +24,16 @@ use crate::{
 use arrow_schema::ArrowError;
 use indexmap::IndexMap;
 
-fn object_header(large: bool, id_size: u8, offset_size: u8) -> u8 {
-    let large_bit = if large { 1 } else { 0 };
-    (large_bit << (BASIC_TYPE_BITS + 4))
-        | ((id_size - 1) << (BASIC_TYPE_BITS + 2))
-        | ((offset_size - 1) << BASIC_TYPE_BITS)
+fn object_header<const LARGE_BIT: u8, const ID_SIZE: u8, const OFFSET_SIZE: u8>() -> u8 {
+    (LARGE_BIT << (BASIC_TYPE_BITS + 4))
+        | ((ID_SIZE - 1) << (BASIC_TYPE_BITS + 2))
+        | ((OFFSET_SIZE - 1) << BASIC_TYPE_BITS)
         | VariantBasicType::Object as u8
 }
 
-struct ObjectHeaderWriter<const OFFSET_SIZE: usize, const ID_SIZE: usize>();
+struct ObjectHeaderWriter<const OFFSET_SIZE: u8, const ID_SIZE: u8>();
 
-impl<const OFFSET_SIZE: usize, const ID_SIZE: usize> ObjectHeaderWriter<OFFSET_SIZE, ID_SIZE> {
+impl<const OFFSET_SIZE: u8, const ID_SIZE: u8> ObjectHeaderWriter<OFFSET_SIZE, ID_SIZE> {
     fn write(
         dst: &mut Vec<u8>,
         num_fields: usize,
@@ -42,8 +41,10 @@ impl<const OFFSET_SIZE: usize, const ID_SIZE: usize> ObjectHeaderWriter<OFFSET_S
         offsets: impl Iterator<Item = usize>,
         data_size: usize,
     ) {
-        let is_large = num_fields > u8::MAX as usize;
-        let header = object_header(is_large, ID_SIZE as u8, OFFSET_SIZE as u8);
+        let header = match num_fields > u8::MAX as usize {
+            true => object_header::<1, { ID_SIZE }, { OFFSET_SIZE }>(),
+            false => object_header::<0, { ID_SIZE }, { OFFSET_SIZE }>(),
+        };
         dst.push(header);
 
         append_packed_u32::<ID_SIZE>(dst, num_fields as u32);
@@ -60,8 +61,8 @@ impl<const OFFSET_SIZE: usize, const ID_SIZE: usize> ObjectHeaderWriter<OFFSET_S
     }
 }
 
-fn append_packed_u32<const SIZE: usize>(dest: &mut Vec<u8>, value: u32) {
-    let len = dest.len() + SIZE;
+fn append_packed_u32<const SIZE: u8>(dest: &mut Vec<u8>, value: u32) {
+    let len = dest.len() + SIZE as usize;
     dest.extend(value.to_le_bytes());
     dest.truncate(len);
 }
@@ -281,8 +282,8 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
         // Calculated header size becomes a hint; being wrong only risks extra allocations.
         // Make sure to reserve enough capacity to handle the extra bytes we'll truncate.
         let mut bytes_to_splice = Vec::with_capacity(header_size + 3);
-        let header = object_header(is_large, id_size, offset_size);
-        bytes_to_splice.push(header);
+        // let header = object_header(is_large, id_size, offset_size);
+        // bytes_to_splice.push(header);
 
         match (offset_size, id_size) {
             (1, 1) => ObjectHeaderWriter::<1, 1>::write(
@@ -355,36 +356,36 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
         value_builder
             .inner_mut()
             .splice(starting_offset..starting_offset, bytes_to_splice);
-
-        // Write header at the original start position
-        let mut header_pos = starting_offset;
-
-        // Write header byte
-        let header = object_header(is_large, id_size, offset_size);
-
-        header_pos = self
-            .parent_state
-            .value_builder()
-            .append_header_start_from_buf_pos(header_pos, header, is_large, num_fields);
-
-        header_pos = self
-            .parent_state
-            .value_builder()
-            .append_offset_array_start_from_buf_pos(
-                header_pos,
-                self.fields.keys().copied().map(|id| id as usize),
-                None,
-                id_size,
-            );
-
-        self.parent_state
-            .value_builder()
-            .append_offset_array_start_from_buf_pos(
-                header_pos,
-                self.fields.values().copied(),
-                Some(data_size),
-                offset_size,
-            );
+        //
+        // // Write header at the original start position
+        // let mut header_pos = starting_offset;
+        //
+        // // Write header byte
+        // let header = object_header(is_large, id_size, offset_size);
+        //
+        // header_pos = self
+        //     .parent_state
+        //     .value_builder()
+        //     .append_header_start_from_buf_pos(header_pos, header, is_large, num_fields);
+        //
+        // header_pos = self
+        //     .parent_state
+        //     .value_builder()
+        //     .append_offset_array_start_from_buf_pos(
+        //         header_pos,
+        //         self.fields.keys().copied().map(|id| id as usize),
+        //         None,
+        //         id_size,
+        //     );
+        //
+        // self.parent_state
+        //     .value_builder()
+        //     .append_offset_array_start_from_buf_pos(
+        //         header_pos,
+        //         self.fields.values().copied(),
+        //         Some(data_size),
+        //         offset_size,
+        //     );
         self.parent_state.finish();
     }
 }
