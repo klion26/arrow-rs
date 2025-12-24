@@ -1,4 +1,3 @@
-use std::io::Read;
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -33,8 +32,38 @@ fn object_header(large: bool, id_size: u8, offset_size: u8) -> u8 {
         | VariantBasicType::Object as u8
 }
 
+struct ObjectHeaderWriter<const OFFSET_SIZE: usize, const ID_SIZE: usize>();
+
+impl<const OFFSET_SIZE: usize, const ID_SIZE: usize> ObjectHeaderWriter<OFFSET_SIZE, ID_SIZE> {
+    fn write(
+        dst: &mut Vec<u8>,
+        num_fields: usize,
+        field_ids: impl Iterator<Item = u32>,
+        offsets: impl Iterator<Item = usize>,
+        data_size: usize,
+    ) {
+        let is_large = num_fields > u8::MAX as usize;
+        let header = object_header(is_large, ID_SIZE as u8, OFFSET_SIZE as u8);
+        dst.push(header);
+
+        append_packed_u32::<ID_SIZE>(dst, num_fields as u32);
+
+        for &id in &field_ids {
+            append_packed_u32::<ID_SIZE>(dst, id);
+        }
+
+        for &off in &offsets {
+            append_packed_u32::<OFFSET_SIZE>(dst, off as u32);
+        }
+
+        append_packed_u32::<OFFSET_SIZE>(dst, data_size as u32);
+    }
+}
+
 fn append_packed_u32<const SIZE: usize>(dest: &mut Vec<u8>, value: u32) {
-    dest.extend(value.to_le_bytes().iter().take(SIZE));
+    let len = dest.len() + SIZE;
+    dest.extend(value.to_le_bytes());
+    dest.truncate(len);
 }
 
 /// A builder for creating [`Variant::Object`] values.
@@ -255,36 +284,71 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
         let header = object_header(is_large, id_size, offset_size);
         bytes_to_splice.push(header);
 
-        match id_size {
-            1 => append_packed_u32::<1>(&mut bytes_to_splice, num_fields as u32),
-            2 => append_packed_u32::<2>(&mut bytes_to_splice, num_fields as u32),
-            4 => append_packed_u32::<4>(&mut bytes_to_splice, num_fields as u32),
-            _ => panic!("unsupport"),
-        }
-
-        for field_id in self.fields.keys() {
-            match id_size {
-                1 => append_packed_u32::<1>(&mut bytes_to_splice, *field_id),
-                2 => append_packed_u32::<2>(&mut bytes_to_splice, *field_id),
-                4 => append_packed_u32::<4>(&mut bytes_to_splice, *field_id),
-                _ => panic!("unsupport"),
-            }
-        }
-
-        for offset in self.fields.values() {
-            match offset_size {
-                1 => append_packed_u32::<1>(&mut bytes_to_splice, *offset as u32),
-                2 => append_packed_u32::<2>(&mut bytes_to_splice, *offset as u32),
-                4 => append_packed_u32::<4>(&mut bytes_to_splice, *offset as u32),
-                _ => panic!("unsupport"),
-            }
-        }
-
-        match offset_size {
-            1 => append_packed_u32::<1>(&mut bytes_to_splice, data_size as u32),
-            2 => append_packed_u32::<2>(&mut bytes_to_splice, data_size as u32),
-            4 => append_packed_u32::<4>(&mut bytes_to_splice, data_size as u32),
-            _ => panic!("unsupport"),
+        match (offset_size, id_size) {
+            (1, 1) => ObjectHeaderWriter::<1, 1>::write(
+                &mut bytes_to_splice,
+                num_fields,
+                self.fields.keys().copied(),
+                self.fields.values().copied(),
+                data_size,
+            ),
+            (1, 2) => ObjectHeaderWriter::<1, 2>::write(
+                &mut bytes_to_splice,
+                num_fields,
+                self.fields.keys().copied(),
+                self.fields.values().copied(),
+                data_size,
+            ),
+            (1, 4) => ObjectHeaderWriter::<1, 4>::write(
+                &mut bytes_to_splice,
+                num_fields,
+                self.fields.keys().copied(),
+                self.fields.values().copied(),
+                data_size,
+            ),
+            (2, 1) => ObjectHeaderWriter::<2, 1>::write(
+                &mut bytes_to_splice,
+                num_fields,
+                self.fields.keys().copied(),
+                self.fields.values().copied(),
+                data_size,
+            ),
+            (2, 2) => ObjectHeaderWriter::<2, 1>::write(
+                &mut bytes_to_splice,
+                num_fields,
+                self.fields.keys().copied(),
+                self.fields.values().copied(),
+                data_size,
+            ),
+            (2, 4) => ObjectHeaderWriter::<2, 1>::write(
+                &mut bytes_to_splice,
+                num_fields,
+                self.fields.keys().copied(),
+                self.fields.values().copied(),
+                data_size,
+            ),
+            (4, 1) => ObjectHeaderWriter::<2, 1>::write(
+                &mut bytes_to_splice,
+                num_fields,
+                self.fields.keys().copied(),
+                self.fields.values().copied(),
+                data_size,
+            ),
+            (4, 2) => ObjectHeaderWriter::<2, 1>::write(
+                &mut bytes_to_splice,
+                num_fields,
+                self.fields.keys().copied(),
+                self.fields.values().copied(),
+                data_size,
+            ),
+            (4, 4) => ObjectHeaderWriter::<2, 1>::write(
+                &mut bytes_to_splice,
+                num_fields,
+                self.fields.keys().copied(),
+                self.fields.values().copied(),
+                data_size,
+            ),
+            _ => panic!("fff"),
         }
 
         // Shift existing data to make room for the header
