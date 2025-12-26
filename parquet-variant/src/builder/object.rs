@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+use crate::builder::PackedU32Iterator;
 use crate::builder::list::ListBuilder;
 use crate::builder::metadata::MetadataBuilder;
 use crate::decoder::VariantBasicType;
@@ -240,46 +241,163 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
         let num_fields = self.fields.len();
         let is_large = num_fields > u8::MAX as usize;
 
-        let header_size = 1 + // header byte
-            (if is_large { 4 } else { 1 }) + // num_fields
-            (num_fields * id_size as usize) + // field IDs
-            ((num_fields + 1) * offset_size as usize); // field offsets + data_size
-
-        // Shift existing data to make room for the header
-        value_builder.inner_mut().splice(
-            starting_offset..starting_offset,
-            std::iter::repeat_n(0u8, header_size),
-        );
-
-        // Write header at the original start position
-        let mut header_pos = starting_offset;
-
-        // Write header byte
+        let num_fields_size = if is_large { 4 } else { 1 };
+        let num_fields_bytes = num_fields.to_le_bytes();
+        let num_elements_bytes = num_fields_bytes.iter().take(num_fields_size).copied();
         let header = object_header(is_large, id_size, offset_size);
 
-        header_pos = self
-            .parent_state
-            .value_builder()
-            .append_header_start_from_buf_pos(header_pos, header, is_large, num_fields);
+        let data_size_bytes = (data_size as u32).to_le_bytes();
+        let data_size_bytes_iter = data_size_bytes.iter().take(offset_size as usize).copied();
+        // Shift existing data to make room for the header
+        let mut buffer = &mut value_builder.0;
+        match (id_size, offset_size) {
+            (1, 1) => {
+                let bytess_to_splice = std::iter::once(header)
+                    .chain(num_elements_bytes)
+                    .chain(PackedU32Iterator::<1, _>::new(
+                        id_size as usize,
+                        self.fields.keys().map(|field_id| field_id.to_le_bytes()),
+                    ))
+                    .chain(PackedU32Iterator::<1, _>::new(
+                        offset_size as usize,
+                        self.fields
+                            .values()
+                            .map(|offset| (*offset as u32).to_le_bytes()),
+                    ))
+                    .chain(data_size_bytes_iter);
+                buffer.splice(starting_offset..starting_offset, bytess_to_splice);
+            }
+            (1, 2) => {
+                let bytess_to_splice = std::iter::once(header)
+                    .chain(num_elements_bytes)
+                    .chain(PackedU32Iterator::<1, _>::new(
+                        id_size as usize,
+                        self.fields.keys().map(|field_id| field_id.to_le_bytes()),
+                    ))
+                    .chain(PackedU32Iterator::<2, _>::new(
+                        offset_size as usize,
+                        self.fields
+                            .values()
+                            .map(|offset| (*offset as u32).to_le_bytes()),
+                    ))
+                    .chain(data_size_bytes_iter);
+                buffer.splice(starting_offset..starting_offset, bytess_to_splice);
+            }
+            (1, 4) => {
+                let bytess_to_splice = std::iter::once(header)
+                    .chain(num_elements_bytes)
+                    .chain(PackedU32Iterator::<1, _>::new(
+                        id_size as usize,
+                        self.fields.keys().map(|field_id| field_id.to_le_bytes()),
+                    ))
+                    .chain(PackedU32Iterator::<4, _>::new(
+                        offset_size as usize,
+                        self.fields
+                            .values()
+                            .map(|offset| (*offset as u32).to_le_bytes()),
+                    ))
+                    .chain(data_size_bytes_iter);
+                buffer.splice(starting_offset..starting_offset, bytess_to_splice);
+            }
+            (2, 1) => {
+                let bytess_to_splice = std::iter::once(header)
+                    .chain(num_elements_bytes)
+                    .chain(PackedU32Iterator::<2, _>::new(
+                        id_size as usize,
+                        self.fields.keys().map(|field_id| field_id.to_le_bytes()),
+                    ))
+                    .chain(PackedU32Iterator::<1, _>::new(
+                        offset_size as usize,
+                        self.fields
+                            .values()
+                            .map(|offset| (*offset as u32).to_le_bytes()),
+                    ))
+                    .chain(data_size_bytes_iter);
+                buffer.splice(starting_offset..starting_offset, bytess_to_splice);
+            }
+            (2, 2) => {
+                let bytess_to_splice = std::iter::once(header)
+                    .chain(num_elements_bytes)
+                    .chain(PackedU32Iterator::<2, _>::new(
+                        id_size as usize,
+                        self.fields.keys().map(|field_id| field_id.to_le_bytes()),
+                    ))
+                    .chain(PackedU32Iterator::<2, _>::new(
+                        offset_size as usize,
+                        self.fields
+                            .values()
+                            .map(|offset| (*offset as u32).to_le_bytes()),
+                    ))
+                    .chain(data_size_bytes_iter);
+                buffer.splice(starting_offset..starting_offset, bytess_to_splice);
+            }
+            (2, 4) => {
+                let bytess_to_splice = std::iter::once(header)
+                    .chain(num_elements_bytes)
+                    .chain(PackedU32Iterator::<2, _>::new(
+                        id_size as usize,
+                        self.fields.keys().map(|field_id| field_id.to_le_bytes()),
+                    ))
+                    .chain(PackedU32Iterator::<4, _>::new(
+                        offset_size as usize,
+                        self.fields
+                            .values()
+                            .map(|offset| (*offset as u32).to_le_bytes()),
+                    ))
+                    .chain(data_size_bytes_iter);
+                buffer.splice(starting_offset..starting_offset, bytess_to_splice);
+            }
+            (4, 1) => {
+                let bytess_to_splice = std::iter::once(header)
+                    .chain(num_elements_bytes)
+                    .chain(PackedU32Iterator::<4, _>::new(
+                        id_size as usize,
+                        self.fields.keys().map(|field_id| field_id.to_le_bytes()),
+                    ))
+                    .chain(PackedU32Iterator::<1, _>::new(
+                        offset_size as usize,
+                        self.fields
+                            .values()
+                            .map(|offset| (*offset as u32).to_le_bytes()),
+                    ))
+                    .chain(data_size_bytes_iter);
+                buffer.splice(starting_offset..starting_offset, bytess_to_splice);
+            }
+            (4, 2) => {
+                let bytess_to_splice = std::iter::once(header)
+                    .chain(num_elements_bytes)
+                    .chain(PackedU32Iterator::<4, _>::new(
+                        id_size as usize,
+                        self.fields.keys().map(|field_id| field_id.to_le_bytes()),
+                    ))
+                    .chain(PackedU32Iterator::<2, _>::new(
+                        offset_size as usize,
+                        self.fields
+                            .values()
+                            .map(|offset| (*offset as u32).to_le_bytes()),
+                    ))
+                    .chain(data_size_bytes_iter);
+                buffer.splice(starting_offset..starting_offset, bytess_to_splice);
+            }
+            (4, 4) => {
+                let bytess_to_splice = std::iter::once(header)
+                    .chain(num_elements_bytes)
+                    .chain(PackedU32Iterator::<4, _>::new(
+                        id_size as usize,
+                        self.fields.keys().map(|field_id| field_id.to_le_bytes()),
+                    ))
+                    .chain(PackedU32Iterator::<4, _>::new(
+                        offset_size as usize,
+                        self.fields
+                            .values()
+                            .map(|offset| (*offset as u32).to_le_bytes()),
+                    ))
+                    .chain(data_size_bytes_iter);
+                buffer.splice(starting_offset..starting_offset, bytess_to_splice);
+            }
+            _ => panic!("do not support"),
+        }
 
-        header_pos = self
-            .parent_state
-            .value_builder()
-            .append_offset_array_start_from_buf_pos(
-                header_pos,
-                self.fields.keys().copied().map(|id| id as usize),
-                None,
-                id_size,
-            );
-
-        self.parent_state
-            .value_builder()
-            .append_offset_array_start_from_buf_pos(
-                header_pos,
-                self.fields.values().copied(),
-                Some(data_size),
-                offset_size,
-            );
         self.parent_state.finish();
     }
 }
