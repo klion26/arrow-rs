@@ -72,14 +72,14 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
         });
     });
 
-    let input_array = StringArray::from_iter_values(random_structure(200));
+    let input_array = StringArray::from_iter_values(random_structure(8000, 200));
     let total_input_bytes = input_array
         .iter()
         .flatten() // filter None
         .map(|v| v.len())
         .sum::<usize>();
     let id = format!(
-        "batch_json_string_to_variant object - 1 depth(200) random_json({} bytes per document)",
+        "batch_json_string_to_variant object - 1 depth(8000-200) random_json({} bytes per document)",
         total_input_bytes / input_array.len()
     );
     let array_ref: ArrayRef = Arc::new(input_array);
@@ -98,14 +98,14 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
         });
     });
 
-    let input_array = StringArray::from_iter_values(random_structure(8000));
+    let input_array = StringArray::from_iter_values(random_structure(8000, 1000));
     let total_input_bytes = input_array
         .iter()
         .flatten() // filter None
         .map(|v| v.len())
         .sum::<usize>();
     let id = format!(
-        "batch_json_string_to_variant object - 1 depth(8000) random_json({} bytes per document)",
+        "batch_json_string_to_variant object - 1 depth(8000-1000) random_json({} bytes per document)",
         total_input_bytes / input_array.len()
     );
     let array_ref: ArrayRef = Arc::new(input_array);
@@ -349,7 +349,7 @@ fn random_json_structure(count: usize) -> impl Iterator<Item = String> {
     (0..count).map(move |_| generator.next().to_string())
 }
 
-fn random_structure(count: usize) -> impl Iterator<Item = String> {
+fn random_structure(count: usize, max_fields: usize) -> impl Iterator<Item = String> {
     let mut generator = RandomJsonGenerator {
         null_weight: 5,
         string_weight: 25,
@@ -357,7 +357,7 @@ fn random_structure(count: usize) -> impl Iterator<Item = String> {
         boolean_weight: 10,
         object_weight: 25,
         array_weight: 0,
-        max_fields: 1000,
+        max_fields: max_fields,
         max_array_length: 0,
         max_depth: 1,
         ..Default::default()
