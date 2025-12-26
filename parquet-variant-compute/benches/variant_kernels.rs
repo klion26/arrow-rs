@@ -98,14 +98,14 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
         });
     });
 
-    let input_array = StringArray::from_iter_values(random_structure(8000, 1000));
+    let input_array = StringArray::from_iter_values(random_structure(8000, 100));
     let total_input_bytes = input_array
         .iter()
         .flatten() // filter None
         .map(|v| v.len())
         .sum::<usize>();
     let id = format!(
-        "batch_json_string_to_variant object - 1 depth(8000-1000) random_json({} bytes per document)",
+        "batch_json_string_to_variant object - 1 depth(8000-100) random_json({} bytes per document)",
         total_input_bytes / input_array.len()
     );
     let array_ref: ArrayRef = Arc::new(input_array);
