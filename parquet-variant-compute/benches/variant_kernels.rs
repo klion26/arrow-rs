@@ -72,6 +72,32 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
         });
     });
 
+    let input_array = StringArray::from_iter_values(random_structure(200));
+    let total_input_bytes = input_array
+        .iter()
+        .flatten() // filter None
+        .map(|v| v.len())
+        .sum::<usize>();
+    let id = format!(
+        "batch_json_string_to_variant object - 1 depth(200) random_json({} bytes per document)",
+        total_input_bytes / input_array.len()
+    );
+    let array_ref: ArrayRef = Arc::new(input_array);
+    let string_array = array_ref.as_any().downcast_ref::<StringArray>().unwrap();
+    let mut json_array: Vec<Value> = Vec::with_capacity(string_array.len());
+    for i in 0..string_array.len() {
+        json_array.push(serde_json::from_str(string_array.value(i)).unwrap());
+    }
+    c.bench_function(&id, |b| {
+        b.iter(|| {
+            let mut variant_array_builder = VariantArrayBuilder::new(string_array.len());
+            for i in 0..json_array.len() {
+                let _ = append_json(&json_array[i], &mut variant_array_builder).unwrap();
+            }
+            variant_array_builder.build()
+        });
+    });
+
     let input_array = StringArray::from_iter_values(random_structure(8000));
     let total_input_bytes = input_array
         .iter()
@@ -79,7 +105,7 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
         .map(|v| v.len())
         .sum::<usize>();
     let id = format!(
-        "batch_json_string_to_variant object - 1 depth random_json({} bytes per document)",
+        "batch_json_string_to_variant object - 1 depth(8000) random_json({} bytes per document)",
         total_input_bytes / input_array.len()
     );
     let array_ref: ArrayRef = Arc::new(input_array);
